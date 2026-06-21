@@ -30,8 +30,8 @@ on:
 
 # ─── tunables ─────────────────────────────────────────────────────────────────
 env:
-  KERNEL_REPO: ${{ github.repository }}
-  KERNEL_BRANCH: sm7635/v/mr
+  KERNEL_REPO: NothingOSS/android_kernel_msm-6.1_nothing_sm7635
+  KERNEL_BRANCH: sm7635/v/mr_frogger
   DEVICE_CODENAME: asteroids
   ARCH: arm64
   SUBARCH: arm64
