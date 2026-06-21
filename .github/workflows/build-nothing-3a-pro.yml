@@ -261,15 +261,13 @@ jobs:
           sed -i '/setuid_hook\.o/d' drivers/kernelsu/Kbuild 2>/dev/null || true
 
           # ── Fix: strip static from sucompat hook functions ─────────────
-          # ksu_handle_stat (fs/stat.c:444), ksu_handle_faccessat (fs/open.c:502),
-          # and ksu_handle_execveat_sucompat (ksud.c:262) are undefined because
-          # they are static inside ksu.c (sucompat.c is #included, not standalone).
-          # Standalone compilation fails — sucompat.c calls many KSU-internal
-          # functions (ksu_is_allow_uid_for_current, escape_with_root_profile, etc.).
-          # Fix: strip 'static' from those specific functions using Python regex
-          # that handles 'static __maybe_unused' and similar attribute combos.
+          # ksu_handle_stat, ksu_handle_faccessat, ksu_handle_execveat_sucompat
+          # are all still undefined — previous regex didn't match the actual
+          # attribute pattern. Use a simpler approach: any line that (a) contains
+          # one of the target function names AND (b) starts with 'static' has the
+          # leading 'static ' removed, regardless of attributes in between.
           if [ -f drivers/kernelsu/sucompat.c ]; then
-            python3 -c "import re; f='drivers/kernelsu/sucompat.c'; c=open(f).read(); pat=r'^static(?:\s+(?:__\w+|noinline|inline))*\s+((?:void|int|bool)\s+ksu_handle_(?:stat|faccessat|execveat_sucompat|execve_sucompat)\b)'; n=re.sub(pat, r'\1', c, flags=re.MULTILINE); open(f,'w').write(n); print('static stripped' if n!=c else 'no match - functions may use different attributes')"
+            python3 -c "f='drivers/kernelsu/sucompat.c'; targets=['ksu_handle_stat','ksu_handle_faccessat','ksu_handle_execveat_sucompat','ksu_handle_execve_sucompat']; lines=open(f).readlines(); out=[l.replace('static ','',1) if any(t in l for t in targets) and l.lstrip().startswith('static') else l for l in lines]; open(f,'w').writelines(out); print('static stripped from {} lines in sucompat.c'.format(sum(1 for a,b in zip(lines,out) if a!=b)))"
           fi
 
           # ── Fix: disable_seccomp stub ───────────────────────────────────
@@ -447,13 +445,26 @@ jobs:
       # ── 11. Build kernel ──────────────────────────────────────────────────
       - name: Build kernel
         run: |
+          # Inject KSU source diagnostics at top of build.log so they appear
+          # in the uploaded artifact — helps debug symbol visibility issues.
+          {
+            echo "=== sucompat.c function definitions (post-patch) ==="
+            grep -n "ksu_handle_stat\|ksu_handle_faccessat\|ksu_handle_execveat_sucompat\|ksu_handle_execve_sucompat\|^static\|^void\|^int\|^bool\|^long" \
+              drivers/kernelsu/sucompat.c 2>/dev/null | head -60 || echo "(sucompat.c not found)"
+            echo "=== ksu.c includes of sucompat ==="
+            grep -n "sucompat" drivers/kernelsu/ksu.c 2>/dev/null || echo "(no match)"
+            echo "=== Kbuild (final) ==="
+            cat drivers/kernelsu/Kbuild 2>/dev/null || echo "(no Kbuild)"
+            echo "=== BUILD START ==="
+          } > build.log
+
           make -j$(nproc) \
             O=${{ env.OUT_DIR }} \
             ARCH=${{ env.ARCH }} \
             LLVM=1 \
             LLVM_IAS=1 \
             ${{ env.KERNEL_IMAGE }} \
-            2>&1 | tee build.log
+            2>&1 | tee -a build.log
 
           # Sanity check
           if [ ! -f "${{ env.OUT_DIR }}/arch/arm64/boot/${{ env.KERNEL_IMAGE }}" ]; then
