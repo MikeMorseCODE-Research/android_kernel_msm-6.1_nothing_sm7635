@@ -115,7 +115,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /var/cache/apt/archives
-          key: apt-${{ runner.os }}-build-deps-v2
+          key: apt-${{ runner.os }}-build-deps-v3
           restore-keys: apt-${{ runner.os }}-
 
       - name: Install build dependencies
@@ -126,7 +126,7 @@ jobs:
             flex git kmod libelf-dev libssl-dev lz4 \
             python3 python3-pip rsync unzip xz-utils zstd \
             device-tree-compiler binutils-aarch64-linux-gnu \
-            gcc-arm-linux-gnueabi binutils-arm-linux-gnueabi
+            gcc-arm-linux-gnueabi binutils-arm-linux-gnueabi dwarves
 
       # ── 4. Cache Clang toolchain ───────────────────────────────────────────
       - name: Cache Clang toolchain
