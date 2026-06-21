@@ -1,0 +1,465 @@
+name: Build Nothing 3a Pro Kernel (Wild KSU + SuSFS)
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_version:
+        description: 'Kernel version suffix (e.g. 6.1.175)'
+        required: false
+        default: '6.1.134'
+      ksu_branch:
+        description: 'Wild_KSU branch/tag to use'
+        required: false
+        default: 'dev'
+      susfs_enabled:
+        description: 'Enable SuSFS'
+        required: true
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+      release:
+        description: 'Create GitHub Release'
+        required: true
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+# ─── tunables ─────────────────────────────────────────────────────────────────
+env:
+  KERNEL_REPO: NothingOSS/android_kernel_msm-6.1_nothing_sm7635
+  KERNEL_BRANCH: sm7635/v/mr
+  DEVICE_CODENAME: asteroids
+  ARCH: arm64
+  SUBARCH: arm64
+  KERNEL_IMAGE: Image
+
+  # Toolchain — AOSP Clang r547379 (Clang 18, good for 6.1)
+  CLANG_VERSION: r547379
+  CLANG_URL: https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r547379.tar.gz
+
+  # Wild KSU
+  WILDKSU_REPO: WildKernels/Wild_KSU
+
+  # SuSFS
+  SUSFS_REPO: simonpunk/susfs4ksu
+  SUSFS_BRANCH: kernel-6.1
+
+  # WildKernels patches
+  WK_PATCHES_REPO: WildKernels/kernel_patches
+
+  # AnyKernel3 (WildKernels fork)
+  AK3_REPO: https://github.com/WildKernels/AnyKernel3
+  AK3_BRANCH: master
+
+  OUT_DIR: out
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
+# ──────────────────────────────────────────────────────────────────────────────
+
+jobs:
+  build:
+    name: Build Kernel - Nothing 3a Pro (SM7635)
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Checkout kernel source ──────────────────────────────────────────
+      - name: Checkout Nothing kernel source
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.KERNEL_REPO }}
+          ref: ${{ env.KERNEL_BRANCH }}
+          fetch-depth: 1
+
+      # ── 2. Resolve dependency SHAs (used as cache keys) ───────────────────
+      - name: Resolve dependency SHAs
+        id: shas
+        run: |
+          resolve() {
+            # Accepts owner/repo, ref — matches branches and tags
+            local repo=$1 ref=$2
+            git ls-remote "https://github.com/${repo}.git" \
+              "refs/heads/${ref}" "refs/tags/${ref}" \
+              | head -1 | cut -f1
+          }
+          resolve_gl() {
+            local repo=$1 ref=$2
+            git ls-remote "https://gitlab.com/${repo}.git" \
+              "refs/heads/${ref}" "refs/tags/${ref}" \
+              | head -1 | cut -f1
+          }
+
+          KSU_SHA=$(resolve "${{ env.WILDKSU_REPO }}" "${{ github.event.inputs.ksu_branch }}")
+          SUSFS_SHA=$(resolve_gl "${{ env.SUSFS_REPO }}" "${{ env.SUSFS_BRANCH }}")
+          WKP_SHA=$(resolve "${{ env.WK_PATCHES_REPO }}" main)
+          AK3_SHA=$(resolve "WildKernels/AnyKernel3" "${{ env.AK3_BRANCH }}")
+
+          echo "ksu=${KSU_SHA}"     >> $GITHUB_OUTPUT
+          echo "susfs=${SUSFS_SHA}" >> $GITHUB_OUTPUT
+          echo "wkp=${WKP_SHA}"     >> $GITHUB_OUTPUT
+          echo "ak3=${AK3_SHA}"     >> $GITHUB_OUTPUT
+
+          echo "Wild_KSU  : ${KSU_SHA}"
+          echo "susfs4ksu : ${SUSFS_SHA}"
+          echo "wk_patches: ${WKP_SHA}"
+          echo "AnyKernel3: ${AK3_SHA}"
+
+      # ── 3. Install host dependencies ───────────────────────────────────────
+      - name: Cache apt packages
+        uses: actions/cache@v4
+        with:
+          path: /var/cache/apt/archives
+          key: apt-${{ runner.os }}-build-deps-v1
+          restore-keys: apt-${{ runner.os }}-
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            bc bison build-essential ca-certificates ccache cpio curl \
+            flex git kmod libelf-dev libssl-dev lz4 \
+            python3 python3-pip rsync unzip xz-utils zstd \
+            device-tree-compiler binutils-aarch64-linux-gnu
+
+      # ── 4. Cache Clang toolchain ───────────────────────────────────────────
+      - name: Cache Clang toolchain
+        id: clang-cache
+        uses: actions/cache@v4
+        with:
+          path: clang
+          key: clang-${{ env.CLANG_VERSION }}
+
+      - name: Download Clang toolchain
+        if: steps.clang-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p clang
+          curl -LSs "${{ env.CLANG_URL }}" | tar -xz -C clang
+
+      - name: Add Clang to PATH
+        run: |
+          echo "$PWD/clang/bin" >> $GITHUB_PATH
+          echo "CC=ccache clang" >> $GITHUB_ENV
+          echo "LD=ld.lld" >> $GITHUB_ENV
+          echo "AR=llvm-ar" >> $GITHUB_ENV
+          echo "NM=llvm-nm" >> $GITHUB_ENV
+          echo "OBJCOPY=llvm-objcopy" >> $GITHUB_ENV
+          echo "OBJDUMP=llvm-objdump" >> $GITHUB_ENV
+          echo "STRIP=llvm-strip" >> $GITHUB_ENV
+          echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
+          echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
+
+      # ── 5. Set up ccache ──────────────────────────────────────────────────
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ env.CLANG_VERSION }}-${{ env.KERNEL_BRANCH }}-${{ github.event.inputs.ksu_branch }}-${{ github.event.inputs.susfs_enabled }}
+          restore-keys: |
+            ccache-${{ env.CLANG_VERSION }}-${{ env.KERNEL_BRANCH }}-
+            ccache-${{ env.CLANG_VERSION }}-
+
+      - name: Configure ccache
+        run: |
+          ccache --max-size=5G
+          ccache --zero-stats
+          echo "CCACHE_EXEC=$(which ccache)" >> $GITHUB_ENV
+
+      # ── 6. Apply Wild KSU ─────────────────────────────────────────────────
+      - name: Cache Wild_KSU
+        id: wildksu-cache
+        uses: actions/cache@v4
+        with:
+          path: Wild_KSU
+          key: wildksu-${{ steps.shas.outputs.ksu }}
+
+      - name: Clone Wild_KSU
+        if: steps.wildksu-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth=1 \
+            -b ${{ github.event.inputs.ksu_branch }} \
+            https://github.com/${{ env.WILDKSU_REPO }} \
+            Wild_KSU
+
+      - name: Show Wild_KSU layout
+        run: |
+          echo "=== Wild_KSU top-level ==="
+          ls -la Wild_KSU/
+          echo "=== kernel/ subdir (if present) ==="
+          ls -la Wild_KSU/kernel/ 2>/dev/null || echo "(no kernel/ subdir found)"
+
+      - name: Integrate Wild KSU into kernel tree
+        run: |
+          # Use setup.sh if the repo ships one (most KSU forks do)
+          if [ -f Wild_KSU/kernel/setup.sh ]; then
+            echo "Using Wild_KSU/kernel/setup.sh"
+            bash Wild_KSU/kernel/setup.sh -
+          elif [ -f Wild_KSU/setup.sh ]; then
+            echo "Using Wild_KSU/setup.sh"
+            bash Wild_KSU/setup.sh -
+          else
+            # Manual copy: prefer kernel/ subdir, fall back to repo root
+            if [ -d Wild_KSU/kernel ] && [ -f Wild_KSU/kernel/Makefile ]; then
+              KSU_SRC=Wild_KSU/kernel
+            elif [ -f Wild_KSU/Makefile ]; then
+              KSU_SRC=Wild_KSU
+            else
+              echo "::error::Cannot locate Wild KSU kernel driver — unexpected repo layout:"
+              find Wild_KSU -maxdepth 2 | head -40
+              exit 1
+            fi
+            echo "Copying KSU driver from: $KSU_SRC"
+            cp -r "$KSU_SRC" drivers/kernelsu
+          fi
+
+          # Wire into build system (guard against duplicate entries)
+          grep -qxF 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig \
+            || echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
+          grep -qxF 'obj-$(CONFIG_KSU) += kernelsu/' drivers/Makefile \
+            || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
+
+      # ── 7. Apply SuSFS patches ────────────────────────────────────────────
+      - name: Cache susfs4ksu
+        if: ${{ github.event.inputs.susfs_enabled == 'true' }}
+        id: susfs-cache
+        uses: actions/cache@v4
+        with:
+          path: susfs4ksu
+          key: susfs-${{ steps.shas.outputs.susfs }}
+
+      - name: Apply SuSFS patches
+        if: ${{ github.event.inputs.susfs_enabled == 'true' }}
+        run: |
+          if [ "${{ steps.susfs-cache.outputs.cache-hit }}" != 'true' ]; then
+            git clone --depth=1 \
+              -b ${{ env.SUSFS_BRANCH }} \
+              https://gitlab.com/${{ env.SUSFS_REPO }}.git \
+              susfs4ksu
+          fi
+
+          # Apply kernel-side SuSFS patches
+          cp susfs4ksu/kernel_patches/fs/susfs.c fs/
+          cp susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/
+          cp susfs4ksu/kernel_patches/include/linux/susfs_def.h include/linux/
+
+          # Patch fs/Makefile and fs/Kconfig for SuSFS
+          echo 'obj-$(CONFIG_KSU_SUSFS) += susfs.o' >> fs/Makefile
+          echo 'source "fs/susfs/Kconfig"' >> fs/Kconfig || true
+
+          # Apply any .patch files provided by SuSFS
+          for patch in susfs4ksu/kernel_patches/*.patch; do
+            [ -f "$patch" ] && git apply "$patch" && echo "Applied: $patch" || echo "Skipped: $patch"
+          done
+
+      # ── 8. Apply WildKernels extra patches ────────────────────────────────
+      - name: Cache wk_patches
+        id: wkp-cache
+        uses: actions/cache@v4
+        with:
+          path: wk_patches
+          key: wkp-${{ steps.shas.outputs.wkp }}
+
+      - name: Apply WildKernels patches
+        run: |
+          if [ "${{ steps.wkp-cache.outputs.cache-hit }}" != 'true' ]; then
+            git clone --depth=1 \
+              https://github.com/${{ env.WK_PATCHES_REPO }}.git \
+              wk_patches
+          fi
+
+          # BBRv3 for kernel 6.1 (android14-6.1 is the correct target)
+          git apply --ignore-whitespace wk_patches/bbr/bbrv3-android14-6.1.patch \
+            && echo "Applied BBRv3 (6.1)" || echo "BBRv3 did not apply cleanly — skipped"
+
+          # Wild KSU hook patches
+          for patch in wk_patches/wild/hooks/*.patch; do
+            [ -f "$patch" ] && git apply --ignore-whitespace "$patch" \
+              && echo "Applied hook patch: $patch" || echo "Skipped: $patch"
+          done
+
+          # GKI ABI bypass
+          git apply --ignore-whitespace wk_patches/wild/bypass_patches/abi_bypass_gki.patch \
+            && echo "Applied GKI ABI bypass" || echo "GKI ABI bypass skipped"
+
+          # SuSFS fix patches (applied on top of the SuSFS integration from step 7)
+          if [ "${{ github.event.inputs.susfs_enabled }}" = "true" ]; then
+            for patch in wk_patches/ksu/susfs_fix_patches/v2.0.0/*.patch; do
+              [ -f "$patch" ] && git apply "$patch" \
+                && echo "Applied SuSFS fix: $patch" || echo "Skipped SuSFS fix: $patch"
+            done
+          fi
+
+      # ── 9. Find defconfig ─────────────────────────────────────────────────
+      - name: Locate asteroids defconfig
+        run: |
+          # Nothing uses vendor/ Kconfig layout — find the right defconfig
+          DEFCONFIG=$(find arch/arm64/configs -name "*asteroids*" -o -name "*sm7635*" \
+            | head -1 | xargs basename 2>/dev/null)
+          if [ -z "$DEFCONFIG" ]; then
+            # Fall back to GKI base config
+            DEFCONFIG="gki_defconfig"
+            echo "Warning: asteroids defconfig not found, using $DEFCONFIG"
+          fi
+          echo "DEFCONFIG=$DEFCONFIG" >> $GITHUB_ENV
+          echo "Using defconfig: $DEFCONFIG"
+
+      # ── 10. Configure kernel ──────────────────────────────────────────────
+      - name: Configure kernel
+        run: |
+          make -j$(nproc) \
+            O=${{ env.OUT_DIR }} \
+            ARCH=${{ env.ARCH }} \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            ${{ env.DEFCONFIG }}
+
+          # Enable KSU
+          scripts/config --file ${{ env.OUT_DIR }}/.config \
+            -e CONFIG_KSU \
+            -e CONFIG_KSU_MANUAL_HOOK
+
+          # Enable SuSFS if requested
+          if [ "${{ github.event.inputs.susfs_enabled }}" = "true" ]; then
+            scripts/config --file ${{ env.OUT_DIR }}/.config \
+              -e CONFIG_KSU_SUSFS \
+              -e CONFIG_KSU_SUSFS_SUS_PATH \
+              -e CONFIG_KSU_SUSFS_SUS_MOUNT \
+              -e CONFIG_KSU_SUSFS_SUS_KSTAT \
+              -e CONFIG_KSU_SUSFS_SUS_OVERLAYFS \
+              -e CONFIG_KSU_SUSFS_TRY_UMOUNT \
+              -e CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT \
+              -e CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT \
+              -e CONFIG_KSU_SUSFS_SPOOF_UNAME
+          fi
+
+          # BBRv3 if BBRv3 patch applied
+          scripts/config --file ${{ env.OUT_DIR }}/.config \
+            -e CONFIG_TCP_CONG_BBR \
+            --set-val CONFIG_DEFAULT_TCP_CONG bbr || true
+
+          # Finalize config
+          make -j$(nproc) \
+            O=${{ env.OUT_DIR }} \
+            ARCH=${{ env.ARCH }} \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            olddefconfig
+
+      # ── 11. Build kernel ──────────────────────────────────────────────────
+      - name: Build kernel
+        run: |
+          make -j$(nproc) \
+            O=${{ env.OUT_DIR }} \
+            ARCH=${{ env.ARCH }} \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            ${{ env.KERNEL_IMAGE }} \
+            2>&1 | tee build.log
+
+          # Sanity check
+          if [ ! -f "${{ env.OUT_DIR }}/arch/arm64/boot/${{ env.KERNEL_IMAGE }}" ]; then
+            echo "::error::Kernel image not found — build failed!"
+            exit 1
+          fi
+          echo "Build successful!"
+
+      - name: ccache stats
+        if: always()
+        run: ccache --show-stats
+
+      # ── 12. Package AnyKernel3 zip ────────────────────────────────────────
+      - name: Cache AnyKernel3
+        id: ak3-cache
+        uses: actions/cache@v4
+        with:
+          path: AnyKernel3
+          key: ak3-${{ steps.shas.outputs.ak3 }}
+
+      - name: Package AnyKernel3 zip
+        run: |
+          if [ "${{ steps.ak3-cache.outputs.cache-hit }}" != 'true' ]; then
+            git clone --depth=1 -b ${{ env.AK3_BRANCH }} ${{ env.AK3_REPO }} AnyKernel3
+          fi
+
+          # Configure AnyKernel3 for asteroids / SM7635
+          cat > AnyKernel3/anykernel.sh << 'EOF'
+          # AnyKernel3 config for Nothing 3a Pro (asteroids / SM7635)
+          properties() { '
+          kernel.string=Wild KSU + SuSFS Kernel for Nothing 3a Pro
+          do.devicecheck=1
+          do.modules=0
+          do.systemless=1
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=asteroids
+          device.name2=Nothing3aPro
+          device.name3=NothingPhone3aPro
+          supported.versions=
+          supported.patchlevels=
+          '; }
+          block=/dev/block/bootdevice/by-name/boot;
+          is_slot_device=1;
+          ramdisk_compression=auto;
+          patch_vbmeta_flag=auto;
+          EOF
+
+          cp ${{ env.OUT_DIR }}/arch/arm64/boot/${{ env.KERNEL_IMAGE }} AnyKernel3/
+
+          # Build the zip
+          ZIPNAME="WildKSU-SuSFS-asteroids-${{ github.event.inputs.kernel_version }}-$(date +%Y%m%d-%H%M).zip"
+          cd AnyKernel3
+          zip -r9 "../${ZIPNAME}" . -x .git\* -x README.md
+          cd ..
+          echo "ZIPNAME=${ZIPNAME}" >> $GITHUB_ENV
+          echo "Packaged: ${ZIPNAME}"
+
+      # ── 13. Upload build log (always) ─────────────────────────────────────
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-${{ github.run_number }}
+          path: build.log
+          retention-days: 7
+
+      # ── 14. Upload kernel artifacts ───────────────────────────────────────
+      - name: Upload kernel artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: asteroids-kernel-${{ github.run_number }}
+          path: |
+            ${{ env.ZIPNAME }}
+            ${{ env.OUT_DIR }}/arch/arm64/boot/${{ env.KERNEL_IMAGE }}
+          retention-days: 14
+
+      # ── 15. Create GitHub Release ─────────────────────────────────────────
+      - name: Create GitHub Release
+        if: ${{ github.event.inputs.release == 'true' }}
+        uses: ncipollo/release-action@v1
+        with:
+          tag: asteroids-${{ github.event.inputs.kernel_version }}-r${{ github.run_number }}
+          name: "Wild KSU + SuSFS | Nothing 3a Pro | ${{ github.event.inputs.kernel_version }}"
+          body: |
+            ## Nothing Phone (3a) Pro — Wild KSU Kernel
+            **Device:** Nothing 3a Pro (asteroids / SM7635)
+            **Kernel:** ${{ github.event.inputs.kernel_version }}
+            **Root:** Wild KSU (`${{ github.event.inputs.ksu_branch }}`)
+            **SuSFS:** ${{ github.event.inputs.susfs_enabled }}
+            **Build:** #${{ github.run_number }} — ${{ github.sha }}
+
+            ### Flash Instructions
+            1. Have Magisk/KSU/APatch installed for recovery access
+            2. Flash the AnyKernel3 ZIP via your recovery or KernelFlasher
+            3. Install the Wild KSU Manager APK from [WildKernels/Wild_KSU](https://github.com/WildKernels/Wild_KSU/releases)
+            4. Reboot
+
+            ### Features
+            - Wild KSU root
+            - SuSFS root hiding
+            - BBRv3 congestion control (if patch applied cleanly)
+
+            > ⚠️ Flash at your own risk. Backup first.
+          artifacts: ${{ env.ZIPNAME }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          allowUpdates: true
