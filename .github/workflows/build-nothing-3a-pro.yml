@@ -253,9 +253,8 @@ jobs:
           cp susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/
           cp susfs4ksu/kernel_patches/include/linux/susfs_def.h include/linux/
 
-          # Patch fs/Makefile and fs/Kconfig for SuSFS
+          # Wire susfs.o into fs/Makefile
           echo 'obj-$(CONFIG_KSU_SUSFS) += susfs.o' >> fs/Makefile
-          echo 'source "fs/susfs/Kconfig"' >> fs/Kconfig || true
 
           # Apply any .patch files provided by SuSFS
           for patch in susfs4ksu/kernel_patches/*.patch; do
