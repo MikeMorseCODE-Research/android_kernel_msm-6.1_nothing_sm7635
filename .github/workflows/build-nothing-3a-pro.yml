@@ -51,8 +51,8 @@ env:
   # WildKernels patches
   WK_PATCHES_REPO: WildKernels/kernel_patches
 
-  # AnyKernel3 (WildKernels fork)
-  AK3_REPO: https://github.com/WildKernels/AnyKernel3
+  # AnyKernel3 — use canonical osm0sis upstream (WildKernels fork may not exist)
+  AK3_REPO: https://github.com/osm0sis/AnyKernel3
   AK3_BRANCH: master
 
   OUT_DIR: out
@@ -98,7 +98,7 @@ jobs:
             [ -n "$SUSFS_SHA" ] && break
           done
           WKP_SHA=$(resolve "${{ env.WK_PATCHES_REPO }}" main)
-          AK3_SHA=$(resolve "WildKernels/AnyKernel3" "${{ env.AK3_BRANCH }}")
+          AK3_SHA=$(resolve "osm0sis/AnyKernel3" "${{ env.AK3_BRANCH }}")
 
           echo "ksu=${KSU_SHA}"     >> $GITHUB_OUTPUT
           echo "susfs=${SUSFS_SHA}" >> $GITHUB_OUTPUT
@@ -503,8 +503,10 @@ jobs:
       - name: Package AnyKernel3 zip
         run: |
           if [ "${{ steps.ak3-cache.outputs.cache-hit }}" != 'true' ]; then
-            git clone --depth=1 -b ${{ env.AK3_BRANCH }} ${{ env.AK3_REPO }} AnyKernel3
+            git clone --depth=1 -b ${{ env.AK3_BRANCH }} ${{ env.AK3_REPO }} AnyKernel3 \
+              || git clone --depth=1 https://github.com/osm0sis/AnyKernel3 AnyKernel3
           fi
+          [ -d AnyKernel3 ] || { echo "::error::AnyKernel3 clone failed"; exit 1; }
 
           # Configure AnyKernel3 for asteroids / SM7635
           cat > AnyKernel3/anykernel.sh << 'EOF'
