@@ -568,6 +568,8 @@ jobs:
           flash_boot;
           ## end boot install
           EOF
+          # Strip YAML-induced leading spaces so AK3 property grep anchors work
+          sed -i 's/^[[:space:]]*//' AnyKernel3/anykernel.sh
 
           cp ${{ env.OUT_DIR }}/arch/arm64/boot/${{ env.KERNEL_IMAGE }} AnyKernel3/
 
