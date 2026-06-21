@@ -239,32 +239,15 @@ jobs:
           grep -rn "disable_seccomp" drivers/kernelsu/ 2>/dev/null | head -20 || echo "(none)"
 
           # ── Fix: remove duplicate #include "hook/lsm_hook.c" ───────────
-          python3 - << 'PYEOF'
-import re, os
-path = 'drivers/kernelsu/ksu.c'
-if os.path.exists(path):
-    with open(path) as f:
-        lines = f.readlines()
-    seen = False
-    out = []
-    changed = False
-    for line in lines:
-        if '#include "hook/lsm_hook.c"' in line:
-            if seen:
-                out.append('// duplicate hook/lsm_hook.c include removed\n')
-                changed = True
-                continue
-            seen = True
-        out.append(line)
-    if changed:
-        with open(path, 'w') as f:
-            f.writelines(out)
-        print("Fixed: removed duplicate hook/lsm_hook.c include from ksu.c")
-    else:
-        print("No duplicate hook/lsm_hook.c include found")
-else:
-    print("ksu.c not found — skipping")
-PYEOF
+          if [ -f drivers/kernelsu/ksu.c ]; then
+            awk '/^#include "hook\/lsm_hook\.c"$/{if(seen){print "// duplicate lsm_hook.c include removed"; next}; seen=1} 1' \
+              drivers/kernelsu/ksu.c > /tmp/ksu_c_fixed.c \
+              && mv /tmp/ksu_c_fixed.c drivers/kernelsu/ksu.c \
+              && echo "Processed ksu.c for duplicate lsm_hook.c include" \
+              || echo "awk processing failed — leaving ksu.c unchanged"
+          else
+            echo "ksu.c not found — skipping duplicate include fix"
+          fi
 
           # ── Fix: sucompat compilation — neither double-compiled nor absent
           KBUILD_SUCOMPAT=$(grep -c "sucompat\.o" drivers/kernelsu/Kbuild 2>/dev/null || echo 0)
@@ -281,14 +264,14 @@ PYEOF
           # Wild KSU GKI patches call them from fs/ files — needs external linkage
           if [ -f drivers/kernelsu/sucompat.c ]; then
             sed -i \
-              's/^static void ksu_handle_stat\b/void ksu_handle_stat/g
-               s/^static int ksu_handle_stat\b/int ksu_handle_stat/g
-               s/^static void ksu_handle_faccessat\b/void ksu_handle_faccessat/g
-               s/^static int ksu_handle_faccessat\b/int ksu_handle_faccessat/g
-               s/^static void ksu_handle_execveat_sucompat\b/void ksu_handle_execveat_sucompat/g
-               s/^static int ksu_handle_execveat_sucompat\b/int ksu_handle_execveat_sucompat/g
-               s/^static void ksu_handle_execve_sucompat\b/void ksu_handle_execve_sucompat/g
-               s/^static int ksu_handle_execve_sucompat\b/int ksu_handle_execve_sucompat/g' \
+              -e 's/^static void ksu_handle_stat\b/void ksu_handle_stat/g' \
+              -e 's/^static int ksu_handle_stat\b/int ksu_handle_stat/g' \
+              -e 's/^static void ksu_handle_faccessat\b/void ksu_handle_faccessat/g' \
+              -e 's/^static int ksu_handle_faccessat\b/int ksu_handle_faccessat/g' \
+              -e 's/^static void ksu_handle_execveat_sucompat\b/void ksu_handle_execveat_sucompat/g' \
+              -e 's/^static int ksu_handle_execveat_sucompat\b/int ksu_handle_execveat_sucompat/g' \
+              -e 's/^static void ksu_handle_execve_sucompat\b/void ksu_handle_execve_sucompat/g' \
+              -e 's/^static int ksu_handle_execve_sucompat\b/int ksu_handle_execve_sucompat/g' \
               drivers/kernelsu/sucompat.c
             echo "Ensured sucompat.c hook functions have external linkage"
           fi
@@ -308,13 +291,8 @@ PYEOF
           # ── Fix: ksu_cred — add definition if missing ──────────────────
           if ! grep -rqE "^const struct cred \*ksu_cred|^struct cred \*ksu_cred" drivers/kernelsu/ 2>/dev/null; then
             echo "ksu_cred not defined anywhere — adding definition to ksu_compat_stubs.c"
-            cat > drivers/kernelsu/ksu_compat_stubs.c << 'CEOF'
-#include <linux/cred.h>
-/* ksu_cred: saved credential for root access; defined here as Wild KSU dev
- * branch does not define it in the copied driver files */
-const struct cred *ksu_cred;
-CEOF
-            # Wire into Kbuild
+            printf '#include <linux/cred.h>\nconst struct cred *ksu_cred;\n' \
+              > drivers/kernelsu/ksu_compat_stubs.c
             grep -qxF 'ksu_compat_stubs.o' drivers/kernelsu/Kbuild \
               || echo 'ksu_compat_stubs.o' >> drivers/kernelsu/Kbuild
             echo "Added ksu_compat_stubs.c with ksu_cred definition"
