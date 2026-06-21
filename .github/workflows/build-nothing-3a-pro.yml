@@ -492,6 +492,24 @@ jobs:
         if: always()
         run: ccache --show-stats
 
+      # ── 11b. Create fastboot-flashable boot.img ───────────────────────────
+      - name: Create flashable boot.img
+        run: |
+          # Download mkbootimg (AOSP tool, Python script)
+          curl -LSso mkbootimg.py \
+            "https://raw.githubusercontent.com/LineageOS/android_system_tools_mkbootimg/lineage-22.1/mkbootimg.py"
+
+          # GKI boot image v4 (Android 15): kernel blob only, no ramdisk
+          # (ramdisk lives in init_boot — DO NOT bundle it here)
+          python3 mkbootimg.py \
+            --header_version 4 \
+            --pagesize 4096 \
+            --kernel "${{ env.OUT_DIR }}/arch/arm64/boot/${{ env.KERNEL_IMAGE }}" \
+            --output boot.img
+
+          echo "boot.img size: $(du -h boot.img | cut -f1)"
+          echo "Flash with: fastboot flash boot boot.img"
+
       # ── 12. Package AnyKernel3 zip ────────────────────────────────────────
       - name: Cache AnyKernel3
         id: ak3-cache
@@ -563,6 +581,7 @@ jobs:
           name: asteroids-kernel-${{ github.run_number }}
           path: |
             ${{ env.ZIPNAME }}
+            boot.img
             ${{ env.OUT_DIR }}/arch/arm64/boot/${{ env.KERNEL_IMAGE }}
           retention-days: 14
 
@@ -582,10 +601,15 @@ jobs:
             **Build:** #${{ github.run_number }} — ${{ github.sha }}
 
             ### Flash Instructions
-            1. Have Magisk/KSU/APatch installed for recovery access
-            2. Flash the AnyKernel3 ZIP via your recovery or KernelFlasher
-            3. Install the Wild KSU Manager APK from [WildKernels/Wild_KSU](https://github.com/WildKernels/Wild_KSU/releases)
-            4. Reboot
+            **Option A — fastboot (recommended):**
+            1. `fastboot flash boot boot.img`
+            2. `fastboot reboot`
+            3. Install Wild KSU Manager APK from [WildKernels/Wild_KSU](https://github.com/WildKernels/Wild_KSU/releases)
+
+            **Option B — AnyKernel3 zip (via KernelFlasher or recovery):**
+            1. Flash the AnyKernel3 ZIP via KernelFlasher or a compatible recovery
+            2. Install Wild KSU Manager APK
+            3. Reboot
 
             ### Features
             - Wild KSU root
@@ -593,6 +617,6 @@ jobs:
             - BBRv3 congestion control (if patch applied cleanly)
 
             > ⚠️ Flash at your own risk. Backup first.
-          artifacts: ${{ env.ZIPNAME }}
+          artifacts: "${{ env.ZIPNAME }},boot.img"
           token: ${{ secrets.GITHUB_TOKEN }}
           allowUpdates: true
