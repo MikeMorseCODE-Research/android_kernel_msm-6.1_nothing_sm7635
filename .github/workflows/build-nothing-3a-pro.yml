@@ -509,6 +509,12 @@ jobs:
           [ -d AnyKernel3 ] || { echo "::error::AnyKernel3 clone failed"; exit 1; }
 
           # Configure AnyKernel3 for asteroids / SM7635
+          # Nothing Phone 3a Pro uses Android 15 GKI 2.0 layout:
+          #   boot       = kernel image only (no real ramdisk)
+          #   init_boot  = generic ramdisk (do NOT touch)
+          #   vendor_boot = vendor ramdisk (do NOT touch)
+          # do.ramdisk=0 tells AK3 to replace only the kernel blob in boot,
+          # leaving init_boot/vendor_boot untouched (same fix needed on OPlus11).
           cat > AnyKernel3/anykernel.sh << 'EOF'
           # AnyKernel3 config for Nothing 3a Pro (asteroids / SM7635)
           properties() { '
@@ -518,6 +524,7 @@ jobs:
           do.systemless=1
           do.cleanup=1
           do.cleanuponabort=0
+          do.ramdisk=0
           device.name1=asteroids
           device.name2=Nothing3aPro
           device.name3=NothingPhone3aPro
@@ -527,7 +534,7 @@ jobs:
           block=/dev/block/bootdevice/by-name/boot;
           is_slot_device=1;
           ramdisk_compression=auto;
-          patch_vbmeta_flag=auto;
+          patch_vbmeta_flag=0;
           EOF
 
           cp ${{ env.OUT_DIR }}/arch/arm64/boot/${{ env.KERNEL_IMAGE }} AnyKernel3/
