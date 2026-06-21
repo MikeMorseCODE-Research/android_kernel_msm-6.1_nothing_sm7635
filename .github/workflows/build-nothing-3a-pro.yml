@@ -224,17 +224,118 @@ jobs:
           grep -qxF 'obj-$(CONFIG_KSU) += kernelsu/' drivers/Makefile \
             || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
 
-          # sucompat.c is #include-d into ksu.c — remove standalone sucompat.o
-          # setuid_hook is header-only — no .c exists, remove from Kbuild
-          sed -i '/sucompat\.o/d; /setuid_hook\.o/d' drivers/kernelsu/Kbuild 2>/dev/null || true
+          # ── Diagnostic: show what setup.sh installed ────────────────────
+          echo "=== drivers/kernelsu/ layout ==="
+          ls -la drivers/kernelsu/
+          echo "=== Kbuild (raw) ==="
+          cat drivers/kernelsu/Kbuild 2>/dev/null || echo "(no Kbuild)"
+          echo "=== ksu.c includes ==="
+          grep -n "#include" drivers/kernelsu/ksu.c 2>/dev/null | head -50 || echo "(no ksu.c)"
+          echo "=== sucompat.c function signatures ==="
+          grep -n "^static\|^void ksu_\|^int ksu_\|^bool ksu_" drivers/kernelsu/sucompat.c 2>/dev/null | head -40 || echo "(no sucompat.c)"
+          echo "=== ksu_cred occurrences ==="
+          grep -rn "ksu_cred" drivers/kernelsu/ 2>/dev/null | head -20 || echo "(none)"
+          echo "=== disable_seccomp occurrences ==="
+          grep -rn "disable_seccomp" drivers/kernelsu/ 2>/dev/null | head -20 || echo "(none)"
 
-          # Apply Wild KSU's own GKI hook patches (designed for Wild KSU dev branch)
-          # These use the correct function names unlike wk_patches/wild/hooks/
+          # ── Fix: remove duplicate #include "hook/lsm_hook.c" ───────────
+          python3 - << 'PYEOF'
+import re, os
+path = 'drivers/kernelsu/ksu.c'
+if os.path.exists(path):
+    with open(path) as f:
+        lines = f.readlines()
+    seen = False
+    out = []
+    changed = False
+    for line in lines:
+        if '#include "hook/lsm_hook.c"' in line:
+            if seen:
+                out.append('// duplicate hook/lsm_hook.c include removed\n')
+                changed = True
+                continue
+            seen = True
+        out.append(line)
+    if changed:
+        with open(path, 'w') as f:
+            f.writelines(out)
+        print("Fixed: removed duplicate hook/lsm_hook.c include from ksu.c")
+    else:
+        print("No duplicate hook/lsm_hook.c include found")
+else:
+    print("ksu.c not found — skipping")
+PYEOF
+
+          # ── Fix: sucompat compilation — neither double-compiled nor absent
+          KBUILD_SUCOMPAT=$(grep -c "sucompat\.o" drivers/kernelsu/Kbuild 2>/dev/null || echo 0)
+          KSU_C_INCLUDES=$(grep -c '#include "sucompat\.c"' drivers/kernelsu/ksu.c 2>/dev/null || echo 0)
+          echo "Kbuild has sucompat.o: $KBUILD_SUCOMPAT | ksu.c includes sucompat.c: $KSU_C_INCLUDES"
+          if [ "$KBUILD_SUCOMPAT" -gt 0 ] && [ "$KSU_C_INCLUDES" -gt 0 ]; then
+            echo "Double-compilation: removing sucompat.o from Kbuild (ksu.c already #includes it)"
+            sed -i '/sucompat\.o/d' drivers/kernelsu/Kbuild
+          fi
+          # setuid_hook.c doesn't exist in Wild KSU dev — remove from Kbuild
+          sed -i '/setuid_hook\.o/d' drivers/kernelsu/Kbuild 2>/dev/null || true
+
+          # ── Fix: sucompat functions must NOT be static ──────────────────
+          # Wild KSU GKI patches call them from fs/ files — needs external linkage
+          if [ -f drivers/kernelsu/sucompat.c ]; then
+            sed -i \
+              's/^static void ksu_handle_stat\b/void ksu_handle_stat/g
+               s/^static int ksu_handle_stat\b/int ksu_handle_stat/g
+               s/^static void ksu_handle_faccessat\b/void ksu_handle_faccessat/g
+               s/^static int ksu_handle_faccessat\b/int ksu_handle_faccessat/g
+               s/^static void ksu_handle_execveat_sucompat\b/void ksu_handle_execveat_sucompat/g
+               s/^static int ksu_handle_execveat_sucompat\b/int ksu_handle_execveat_sucompat/g
+               s/^static void ksu_handle_execve_sucompat\b/void ksu_handle_execve_sucompat/g
+               s/^static int ksu_handle_execve_sucompat\b/int ksu_handle_execve_sucompat/g' \
+              drivers/kernelsu/sucompat.c
+            echo "Ensured sucompat.c hook functions have external linkage"
+          fi
+
+          # ── Fix: disable_seccomp — not implemented in Wild KSU dev branch
+          # seccomp_cache.c (included in ksu.c) calls it but setuid_hook.c is missing
+          if grep -rq "disable_seccomp" drivers/kernelsu/ 2>/dev/null; then
+            if ! grep -rq "void disable_seccomp\|static.*disable_seccomp" drivers/kernelsu/ 2>/dev/null; then
+              echo "disable_seccomp is called but not defined — removing seccomp_cache.c include"
+              sed -i 's|#include "seccomp_cache.c"|/* seccomp_cache.c excluded: disable_seccomp undefined in dev branch */|g' \
+                drivers/kernelsu/ksu.c 2>/dev/null || true
+              # Also remove from Kbuild if listed separately
+              sed -i '/seccomp_cache\.o/d' drivers/kernelsu/Kbuild 2>/dev/null || true
+            fi
+          fi
+
+          # ── Fix: ksu_cred — add definition if missing ──────────────────
+          if ! grep -rqE "^const struct cred \*ksu_cred|^struct cred \*ksu_cred" drivers/kernelsu/ 2>/dev/null; then
+            echo "ksu_cred not defined anywhere — adding definition to ksu_compat_stubs.c"
+            cat > drivers/kernelsu/ksu_compat_stubs.c << 'CEOF'
+#include <linux/cred.h>
+/* ksu_cred: saved credential for root access; defined here as Wild KSU dev
+ * branch does not define it in the copied driver files */
+const struct cred *ksu_cred;
+CEOF
+            # Wire into Kbuild
+            grep -qxF 'ksu_compat_stubs.o' drivers/kernelsu/Kbuild \
+              || echo 'ksu_compat_stubs.o' >> drivers/kernelsu/Kbuild
+            echo "Added ksu_compat_stubs.c with ksu_cred definition"
+          else
+            echo "ksu_cred is defined — no stub needed"
+          fi
+
+          # ── Apply Wild KSU's own GKI hook patches ──────────────────────
+          echo "=== Available GKI patches ==="
+          ls Wild_KSU/kernel/patches/gki/*.patch 2>/dev/null || echo "(no GKI patches found at that path)"
           for patch in Wild_KSU/kernel/patches/gki/*.patch; do
             [ -f "$patch" ] && git apply --ignore-whitespace "$patch" \
               && echo "Applied Wild KSU GKI patch: $(basename $patch)" \
               || echo "Skipped Wild KSU GKI patch: $(basename $patch)"
           done
+
+          # ── Post-patch diagnostic ───────────────────────────────────────
+          echo "=== Kbuild after modifications ==="
+          cat drivers/kernelsu/Kbuild 2>/dev/null
+          echo "=== ksu_cred referenced in fs/ (from GKI patches) ==="
+          grep -rn "ksu_cred" fs/ 2>/dev/null | head -10 || echo "(none)"
 
       # ── 7. Apply SuSFS patches ────────────────────────────────────────────
       - name: Cache susfs4ksu
@@ -340,7 +441,8 @@ jobs:
             -e CONFIG_KSU \
             -e CONFIG_KSU_MANUAL_HOOK \
             -d CONFIG_TRIM_UNUSED_KSYMS \
-            -e CONFIG_SECTION_MISMATCH_WARN_ONLY
+            -e CONFIG_SECTION_MISMATCH_WARN_ONLY \
+            -d CONFIG_DEBUG_INFO_BTF
 
           # Enable SuSFS if requested
           if [ "${{ github.event.inputs.susfs_enabled }}" = "true" ]; then
