@@ -225,8 +225,8 @@ jobs:
             || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
 
           # sucompat.c is #include-d into ksu.c — remove standalone sucompat.o
-          # entries from Kbuild to avoid compiling it twice (which fails)
-          sed -i '/sucompat\.o/d' drivers/kernelsu/Kbuild 2>/dev/null || true
+          # setuid_hook is header-only — no .c exists, remove from Kbuild
+          sed -i '/sucompat\.o/d; /setuid_hook\.o/d' drivers/kernelsu/Kbuild 2>/dev/null || true
 
       # ── 7. Apply SuSFS patches ────────────────────────────────────────────
       - name: Cache susfs4ksu
