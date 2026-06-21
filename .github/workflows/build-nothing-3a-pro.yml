@@ -495,13 +495,15 @@ jobs:
       # ── 11b. Create fastboot-flashable boot.img ───────────────────────────
       - name: Create flashable boot.img
         run: |
-          # Download mkbootimg (AOSP tool, Python script)
-          curl -LSso mkbootimg.py \
-            "https://raw.githubusercontent.com/LineageOS/android_system_tools_mkbootimg/lineage-22.1/mkbootimg.py"
+          # Clone the full mkbootimg repo so the gki/ subpackage is present
+          # (mkbootimg.py imports gki.generate_gki_certificate at module load)
+          git clone --depth=1 -b lineage-22.1 \
+            https://github.com/LineageOS/android_system_tools_mkbootimg \
+            /tmp/mkbootimg_tools
 
           # GKI boot image v4 (Android 15): kernel blob only, no ramdisk
           # (ramdisk lives in init_boot — DO NOT bundle it here)
-          python3 mkbootimg.py \
+          python3 /tmp/mkbootimg_tools/mkbootimg.py \
             --header_version 4 \
             --pagesize 4096 \
             --kernel "${{ env.OUT_DIR }}/arch/arm64/boot/${{ env.KERNEL_IMAGE }}" \
