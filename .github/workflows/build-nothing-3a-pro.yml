@@ -260,23 +260,16 @@ jobs:
           # setuid_hook.c doesn't exist in Wild KSU dev — remove from Kbuild
           sed -i '/setuid_hook\.o/d' drivers/kernelsu/Kbuild 2>/dev/null || true
 
-          # ── Fix: sucompat.c — compile as standalone object ─────────────
+          # ── Fix: strip static from sucompat hook functions ─────────────
           # ksu_handle_stat (fs/stat.c:444), ksu_handle_faccessat (fs/open.c:502),
-          # and ksu_handle_execveat_sucompat (ksud.c:262) are all undefined because
-          # they are static inside ksu.c's translation unit (sucompat.c is #included).
-          # Sed to remove 'static' failed (likely 'static __maybe_unused' attribute).
-          # Fix: compile sucompat.c as a separate object — non-static by default.
+          # and ksu_handle_execveat_sucompat (ksud.c:262) are undefined because
+          # they are static inside ksu.c (sucompat.c is #included, not standalone).
+          # Standalone compilation fails — sucompat.c calls many KSU-internal
+          # functions (ksu_is_allow_uid_for_current, escape_with_root_profile, etc.).
+          # Fix: strip 'static' from those specific functions using Python regex
+          # that handles 'static __maybe_unused' and similar attribute combos.
           if [ -f drivers/kernelsu/sucompat.c ]; then
-            # sucompat.c has no own headers (designed to be #included) — add them
-            printf '#include <linux/compiler.h>\n#include <linux/types.h>\n#include <linux/sched.h>\n#include <linux/cred.h>\n#include <linux/fs.h>\n#include <linux/uaccess.h>\n' \
-              | cat - drivers/kernelsu/sucompat.c > /tmp/sucompat_standalone.c \
-              && mv /tmp/sucompat_standalone.c drivers/kernelsu/sucompat.c
-            # Remove #include "sucompat.c" from ksu.c — compiled separately now
-            sed -i '/#include "sucompat\.c"/d' drivers/kernelsu/ksu.c
-            # Ensure sucompat.o is in Kbuild (setup.sh may have removed it)
-            grep -qF 'sucompat.o' drivers/kernelsu/Kbuild \
-              || echo 'obj-y += sucompat.o' >> drivers/kernelsu/Kbuild
-            echo "sucompat.c patched for standalone compilation"
+            python3 -c "import re; f='drivers/kernelsu/sucompat.c'; c=open(f).read(); pat=r'^static(?:\s+(?:__\w+|noinline|inline))*\s+((?:void|int|bool)\s+ksu_handle_(?:stat|faccessat|execveat_sucompat|execve_sucompat)\b)'; n=re.sub(pat, r'\1', c, flags=re.MULTILINE); open(f,'w').write(n); print('static stripped' if n!=c else 'no match - functions may use different attributes')"
           fi
 
           # ── Fix: disable_seccomp stub ───────────────────────────────────
