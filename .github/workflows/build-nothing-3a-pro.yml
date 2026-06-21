@@ -293,8 +293,8 @@ jobs:
             echo "ksu_cred not defined anywhere — adding definition to ksu_compat_stubs.c"
             printf '#include <linux/cred.h>\nconst struct cred *ksu_cred;\n' \
               > drivers/kernelsu/ksu_compat_stubs.c
-            grep -qxF 'ksu_compat_stubs.o' drivers/kernelsu/Kbuild \
-              || echo 'ksu_compat_stubs.o' >> drivers/kernelsu/Kbuild
+            grep -qF 'ksu_compat_stubs.o' drivers/kernelsu/Kbuild \
+              || echo 'obj-y += ksu_compat_stubs.o' >> drivers/kernelsu/Kbuild
             echo "Added ksu_compat_stubs.c with ksu_cred definition"
           else
             echo "ksu_cred is defined — no stub needed"
