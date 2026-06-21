@@ -284,7 +284,7 @@ jobs:
           # (lsm_hook.c is #included into ksu.c). setuid_hook.c which defines it
           # doesn't exist in Wild KSU dev branch. Add empty stub before the include.
           if grep -q 'disable_seccomp' drivers/kernelsu/hook/lsm_hook.c 2>/dev/null; then
-            sed -i 's|#include "hook/lsm_hook.c"|static void disable_seccomp(struct task_struct *task) {}\n#include "hook/lsm_hook.c"|' \
+            sed -i 's|#include "hook/lsm_hook.c"|static void disable_seccomp(void) {}\n#include "hook/lsm_hook.c"|' \
               drivers/kernelsu/ksu.c \
               && echo "Added disable_seccomp stub before hook/lsm_hook.c include" \
               || echo "Could not patch ksu.c for disable_seccomp stub"
