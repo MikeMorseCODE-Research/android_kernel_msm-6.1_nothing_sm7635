@@ -228,6 +228,14 @@ jobs:
           # setuid_hook is header-only — no .c exists, remove from Kbuild
           sed -i '/sucompat\.o/d; /setuid_hook\.o/d' drivers/kernelsu/Kbuild 2>/dev/null || true
 
+          # Apply Wild KSU's own GKI hook patches (designed for Wild KSU dev branch)
+          # These use the correct function names unlike wk_patches/wild/hooks/
+          for patch in Wild_KSU/kernel/patches/gki/*.patch; do
+            [ -f "$patch" ] && git apply --ignore-whitespace "$patch" \
+              && echo "Applied Wild KSU GKI patch: $(basename $patch)" \
+              || echo "Skipped Wild KSU GKI patch: $(basename $patch)"
+          done
+
       # ── 7. Apply SuSFS patches ────────────────────────────────────────────
       - name: Cache susfs4ksu
         if: ${{ github.event.inputs.susfs_enabled == 'true' }}
@@ -286,11 +294,10 @@ jobs:
           git apply --ignore-whitespace wk_patches/bbr/bbrv3-android14-6.1.patch \
             && echo "Applied BBRv3 (6.1)" || echo "BBRv3 did not apply cleanly — skipped"
 
-          # Wild KSU hook patches
-          for patch in wk_patches/wild/hooks/*.patch; do
-            [ -f "$patch" ] && git apply --ignore-whitespace "$patch" \
-              && echo "Applied hook patch: $patch" || echo "Skipped: $patch"
-          done
+          # NOTE: wk_patches/wild/hooks/ is NOT applied — those patches reference
+          # ksu_vfs_read_hook/ksu_input_hook/ksu_handle_execve_ksud which don't
+          # exist in Wild KSU dev branch. Wild KSU's own GKI patches (applied in
+          # step 6) are used instead.
 
           # GKI ABI bypass
           git apply --ignore-whitespace wk_patches/wild/bypass_patches/abi_bypass_gki.patch \
