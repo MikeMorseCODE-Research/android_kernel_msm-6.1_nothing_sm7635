@@ -46,7 +46,7 @@ env:
 
   # SuSFS
   SUSFS_REPO: simonpunk/susfs4ksu
-  SUSFS_BRANCH: kernel-6.1
+  SUSFS_BRANCH: gki-android15-6.1
 
   # WildKernels patches
   WK_PATCHES_REPO: WildKernels/kernel_patches
@@ -92,7 +92,11 @@ jobs:
           }
 
           KSU_SHA=$(resolve "${{ env.WILDKSU_REPO }}" "${{ github.event.inputs.ksu_branch }}")
-          SUSFS_SHA=$(resolve_gl "${{ env.SUSFS_REPO }}" "${{ env.SUSFS_BRANCH }}")
+          SUSFS_SHA=""
+          for branch in ${{ env.SUSFS_BRANCH }} kernel-6.1 gki-android14-6.1 main; do
+            SUSFS_SHA=$(resolve_gl "${{ env.SUSFS_REPO }}" "$branch")
+            [ -n "$SUSFS_SHA" ] && break
+          done
           WKP_SHA=$(resolve "${{ env.WK_PATCHES_REPO }}" main)
           AK3_SHA=$(resolve "WildKernels/AnyKernel3" "${{ env.AK3_BRANCH }}")
 
@@ -232,10 +236,16 @@ jobs:
         if: ${{ github.event.inputs.susfs_enabled == 'true' }}
         run: |
           if [ "${{ steps.susfs-cache.outputs.cache-hit }}" != 'true' ]; then
-            git clone --depth=1 \
-              -b ${{ env.SUSFS_BRANCH }} \
-              https://gitlab.com/${{ env.SUSFS_REPO }}.git \
-              susfs4ksu
+            SUSFS_URL="https://gitlab.com/${{ env.SUSFS_REPO }}.git"
+            for branch in ${{ env.SUSFS_BRANCH }} kernel-6.1 gki-android14-6.1 main; do
+              if git ls-remote --exit-code "$SUSFS_URL" "refs/heads/$branch" &>/dev/null; then
+                echo "Cloning susfs4ksu branch: $branch"
+                git clone --depth=1 -b "$branch" "$SUSFS_URL" susfs4ksu
+                break
+              fi
+              echo "Branch not found: $branch"
+            done
+            [ -d susfs4ksu ] || { echo "::error::No valid susfs4ksu branch found"; exit 1; }
           fi
 
           # Apply kernel-side SuSFS patches
