@@ -332,7 +332,8 @@ jobs:
           scripts/config --file ${{ env.OUT_DIR }}/.config \
             -e CONFIG_KSU \
             -e CONFIG_KSU_MANUAL_HOOK \
-            -d CONFIG_TRIM_UNUSED_KSYMS
+            -d CONFIG_TRIM_UNUSED_KSYMS \
+            -e CONFIG_SECTION_MISMATCH_WARN_ONLY
 
           # Enable SuSFS if requested
           if [ "${{ github.event.inputs.susfs_enabled }}" = "true" ]; then
