@@ -404,12 +404,13 @@ jobs:
       - name: Locate asteroids defconfig
         run: |
           # Nothing uses vendor/ Kconfig layout — find the right defconfig
-          DEFCONFIG=$(find arch/arm64/configs -name "*asteroids*" -o -name "*sm7635*" \
-            | head -1 | xargs basename 2>/dev/null)
-          if [ -z "$DEFCONFIG" ]; then
-            # Fall back to GKI base config
+          DEFCONFIG_PATH=$(find arch/arm64/configs -name "*asteroids*" -o -name "*sm7635*" \
+            2>/dev/null | head -1)
+          if [ -n "$DEFCONFIG_PATH" ]; then
+            DEFCONFIG=$(basename "$DEFCONFIG_PATH")
+          else
             DEFCONFIG="gki_defconfig"
-            echo "Warning: asteroids defconfig not found, using $DEFCONFIG"
+            echo "Warning: asteroids/sm7635 defconfig not found, using $DEFCONFIG"
           fi
           echo "DEFCONFIG=$DEFCONFIG" >> $GITHUB_ENV
           echo "Using defconfig: $DEFCONFIG"
