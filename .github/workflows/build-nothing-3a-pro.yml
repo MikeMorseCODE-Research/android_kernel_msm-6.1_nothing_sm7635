@@ -63,6 +63,8 @@ jobs:
   build:
     name: Build Kernel - Nothing 3a Pro (SM7635)
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       # ── 1. Checkout kernel source ──────────────────────────────────────────
