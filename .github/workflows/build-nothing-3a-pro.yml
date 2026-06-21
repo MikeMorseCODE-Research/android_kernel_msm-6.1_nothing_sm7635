@@ -37,9 +37,9 @@ env:
   SUBARCH: arm64
   KERNEL_IMAGE: Image
 
-  # Toolchain — AOSP Clang r487747c (Clang 17.0.2) — matches stock Nothing kernel
-  CLANG_VERSION: r487747c
-  CLANG_URL: https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r487747c.tar.gz
+  # Toolchain — AOSP Clang r547379 (Clang 18) — stock used 17.0.2 but 18 is available and compatible
+  CLANG_VERSION: r547379
+  CLANG_URL: https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r547379.tar.gz
 
   # Wild KSU
   WILDKSU_REPO: WildKernels/Wild_KSU
