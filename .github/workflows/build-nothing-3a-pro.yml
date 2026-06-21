@@ -281,17 +281,32 @@ jobs:
               || echo "Could not patch ksu.c for disable_seccomp stub"
           fi
 
-          # ── Fix: ksu_cred — add definition if missing ──────────────────
+          # ── Fix: ksu_cred + weak stubs for sucompat hook functions ────────
+          # sucompat.c lines 111/120/146 have non-static definitions — Python
+          # correctly reported 'no match'. The real problem: the #include
+          # "sucompat.c" at ksu.c:43 is likely inside a #ifdef guard (e.g.
+          # CONFIG_KSU_SUCOMPAT) that isn't set in our .config, so the functions
+          # never get compiled. Fix with __weak stubs: linker uses the strong
+          # sucompat.c definition when available, falls back to stub otherwise.
           if ! grep -rqE "^const struct cred \*ksu_cred|^struct cred \*ksu_cred" drivers/kernelsu/ 2>/dev/null; then
-            echo "ksu_cred not defined anywhere — adding definition to ksu_compat_stubs.c"
-            printf '#include <linux/cred.h>\nconst struct cred *ksu_cred;\n' \
-              > drivers/kernelsu/ksu_compat_stubs.c
-            grep -qF 'ksu_compat_stubs.o' drivers/kernelsu/Kbuild \
-              || echo 'obj-y += ksu_compat_stubs.o' >> drivers/kernelsu/Kbuild
-            echo "Added ksu_compat_stubs.c with ksu_cred definition"
-          else
-            echo "ksu_cred is defined — no stub needed"
+            echo "ksu_cred not defined anywhere — adding compat stubs file"
           fi
+          printf '%s\n' \
+            '#include <linux/types.h>' \
+            '#include <linux/cred.h>' \
+            '#include <linux/fs.h>' \
+            '' \
+            'const struct cred *ksu_cred;' \
+            '' \
+            '/* Weak stubs: used only when sucompat.c is compiled out (ifdef guard).*/' \
+            '/* If sucompat.c IS compiled, the linker prefers those strong defs.  */' \
+            '__weak int ksu_handle_faccessat(int *dfd, const char __user **f, int *mode, int *fl) { return 0; }' \
+            '__weak int ksu_handle_stat(int *dfd, const char __user **f, int *fl) { return 0; }' \
+            '__weak int ksu_handle_execveat_sucompat(int *fd, struct filename **fp, void *argv, void *envp, int *fl) { return 0; }' \
+            > drivers/kernelsu/ksu_compat_stubs.c
+          grep -qF 'ksu_compat_stubs.o' drivers/kernelsu/Kbuild \
+            || echo 'obj-y += ksu_compat_stubs.o' >> drivers/kernelsu/Kbuild
+          echo "Written ksu_compat_stubs.c with ksu_cred + weak sucompat stubs"
 
           # ── Apply Wild KSU's own GKI hook patches ──────────────────────
           echo "=== Available GKI patches ==="
@@ -451,8 +466,8 @@ jobs:
             echo "=== sucompat.c function definitions (post-patch) ==="
             grep -n "ksu_handle_stat\|ksu_handle_faccessat\|ksu_handle_execveat_sucompat\|ksu_handle_execve_sucompat\|^static\|^void\|^int\|^bool\|^long" \
               drivers/kernelsu/sucompat.c 2>/dev/null | head -60 || echo "(sucompat.c not found)"
-            echo "=== ksu.c includes of sucompat ==="
-            grep -n "sucompat" drivers/kernelsu/ksu.c 2>/dev/null || echo "(no match)"
+            echo "=== ksu.c context around sucompat include (lines 38-52) ==="
+            sed -n '38,52p' drivers/kernelsu/ksu.c 2>/dev/null || grep -n "sucompat" drivers/kernelsu/ksu.c 2>/dev/null || echo "(no match)"
             echo "=== Kbuild (final) ==="
             cat drivers/kernelsu/Kbuild 2>/dev/null || echo "(no Kbuild)"
             echo "=== BUILD START ==="
