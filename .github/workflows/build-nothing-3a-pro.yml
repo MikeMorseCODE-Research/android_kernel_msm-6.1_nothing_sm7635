@@ -540,8 +540,10 @@ jobs:
           do.cleanuponabort=0
           do.ramdisk=0
           device.name1=asteroids
-          device.name2=Nothing3aPro
-          device.name3=NothingPhone3aPro
+          device.name2=Asteroids
+          device.name3=AsteroidsProEEA
+          device.name4=Nothing3aPro
+          device.name5=A059P
           supported.versions=
           supported.patchlevels=
           '; }
