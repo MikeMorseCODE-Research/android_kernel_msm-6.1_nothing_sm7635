@@ -182,10 +182,24 @@ jobs:
       - name: Clone Wild_KSU
         if: steps.wildksu-cache.outputs.cache-hit != 'true'
         run: |
-          git clone --depth=1 \
+          git clone \
             -b ${{ github.event.inputs.ksu_branch }} \
             https://github.com/${{ env.WILDKSU_REPO }} \
             Wild_KSU
+          # Full clone (no --depth=1) so git describe/rev-list resolve real
+          # tags and commit counts — Kbuild's version detection needs this,
+          # and its own auto-unshallow fallback fails silently (`|| true`).
+
+      - name: Verify Wild_KSU git version resolves
+        run: |
+          cd Wild_KSU
+          echo "HEAD: $(git rev-parse HEAD)"
+          echo "rev-list --count: $(git rev-list --count HEAD)"
+          echo "describe --tags: $(git describe --tags --abbrev=0 2>&1)"
+          if [ -f .git/shallow ]; then
+            echo "::error::Wild_KSU is still a shallow clone — KSU version will be abnormal"
+            exit 1
+          fi
 
       - name: Show Wild_KSU layout
         run: |
@@ -199,7 +213,7 @@ jobs:
           # Use setup.sh if the repo ships one (most KSU forks do)
           if [ -f Wild_KSU/kernel/setup.sh ]; then
             echo "Using Wild_KSU/kernel/setup.sh"
-            bash Wild_KSU/kernel/setup.sh -
+            bash Wild_KSU/kernel/setup.sh "${{ github.event.inputs.ksu_branch }}"
           elif [ -f Wild_KSU/setup.sh ]; then
             echo "Using Wild_KSU/setup.sh"
             bash Wild_KSU/setup.sh -
