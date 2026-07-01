@@ -553,6 +553,14 @@ jobs:
           patch_vbmeta_flag=0;
           EOF
 
+          # Replace 32-bit busybox with ARM64 (Nothing OS has no compat32)
+          curl -Lo AnyKernel3/tools/busybox \
+            https://raw.githubusercontent.com/Zackptg5/Cross-Compiled-Binaries-Android/master/aarch64/busybox-ndk \
+            || curl -Lo AnyKernel3/tools/busybox \
+            https://raw.githubusercontent.com/osm0sis/AnyKernel3/master/tools/busybox
+          chmod +x AnyKernel3/tools/busybox
+          echo "busybox arch: $(file AnyKernel3/tools/busybox)"
+
           cp ${{ env.OUT_DIR }}/arch/arm64/boot/${{ env.KERNEL_IMAGE }} AnyKernel3/
 
           # Build the zip
