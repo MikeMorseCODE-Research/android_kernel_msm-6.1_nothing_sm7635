@@ -483,13 +483,29 @@ jobs:
           patch_vbmeta_flag=0;
           EOF
 
-          # Replace 32-bit busybox with ARM64 (Nothing OS has no compat32)
-          curl -Lo AnyKernel3/tools/busybox \
-            https://raw.githubusercontent.com/Zackptg5/Cross-Compiled-Binaries-Android/master/aarch64/busybox-ndk \
-            || curl -Lo AnyKernel3/tools/busybox \
-            https://raw.githubusercontent.com/osm0sis/AnyKernel3/master/tools/busybox
+          # Get ARM64 busybox (Nothing OS has no 32-bit compat).
+          # NOTE: both previous sources are dead/wrong —
+          #   Zackptg5/Cross-Compiled-Binaries-Android/aarch64/busybox-ndk -> 404
+          #   osm0sis/AnyKernel3/tools/busybox -> exists but is 32-bit ARM
+          # `-f`/`--fail` is required: without it, curl treats an HTTP 404
+          # as success and happily writes the error page to the output file,
+          # so the `||` fallback never triggers.
+          curl -fLo AnyKernel3/tools/busybox \
+            https://raw.githubusercontent.com/xerta555/Busybox-Binaries/master/busybox-arm64 \
+            || curl -fLo AnyKernel3/tools/busybox \
+            https://raw.githubusercontent.com/EXALAB/Busybox-static/master/busybox_arm64
           chmod +x AnyKernel3/tools/busybox
           echo "busybox arch: $(file AnyKernel3/tools/busybox)"
+
+          # Hard fail if what we got isn't actually an aarch64 ELF — don't
+          # let a broken busybox silently ride along into the packaged zip
+          # like it did before (it showed up as flash-time "line 1: 404::
+          # not found" instead of failing here where it's actually useful).
+          if ! file AnyKernel3/tools/busybox | grep -q "ARM aarch64"; then
+            echo "::error::busybox is not a valid aarch64 ELF binary — packaging would produce a broken zip"
+            file AnyKernel3/tools/busybox
+            exit 1
+          fi
 
           cp ${{ env.OUT_DIR }}/arch/arm64/boot/${{ env.KERNEL_IMAGE }} AnyKernel3/
 
