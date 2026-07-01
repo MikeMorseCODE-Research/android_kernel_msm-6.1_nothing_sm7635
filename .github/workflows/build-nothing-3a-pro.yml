@@ -554,15 +554,21 @@ jobs:
           EOF
 
           # Get ARM64 busybox (Nothing OS has no 32-bit compat)
-          sudo dpkg --add-architecture arm64
-          sudo apt-get update -qq
+            sudo dpkg --add-architecture arm64
+            # arm64 packages don't exist on security.ubuntu.com/archive.ubuntu.com
+            # (amd64/i386 only) — they live on ports.ubuntu.com. Without this,
+            # apt-get update 404s on every arm64 index and, under bash -e, kills
+            # this whole step before it ever reaches the busybox install line.
+          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble main universe" \
+          | sudo tee /etc/apt/sources.list.d/arm64-ports.list
+          sudo apt-get update -qq || true
           sudo apt-get install -y busybox-static:arm64 2>/dev/null || true
           ARM64_BB=$(find /usr -name "busybox" 2>/dev/null | xargs -I{} sh -c 'file {} | grep -l "aarch64\|ARM aarch64" {}' 2>/dev/null | head -1)
           if [ -n "$ARM64_BB" ]; then
             cp "$ARM64_BB" AnyKernel3/tools/busybox
             echo "Installed ARM64 busybox from: $ARM64_BB"
           else
-            echo "WARNING: Could not find ARM64 busybox"
+              echo "WARNING: Could not find ARM64 busybox"
           fi
           chmod +x AnyKernel3/tools/busybox
           file AnyKernel3/tools/busybox
