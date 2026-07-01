@@ -553,13 +553,19 @@ jobs:
           patch_vbmeta_flag=0;
           EOF
 
-          # Replace 32-bit busybox with ARM64 (Nothing OS has no compat32)
-          curl -Lo AnyKernel3/tools/busybox \
-            https://raw.githubusercontent.com/Zackptg5/Cross-Compiled-Binaries-Android/master/aarch64/busybox-ndk \
-            || curl -Lo AnyKernel3/tools/busybox \
-            https://raw.githubusercontent.com/osm0sis/AnyKernel3/master/tools/busybox
+          # Get ARM64 busybox (Nothing OS has no 32-bit compat)
+          sudo dpkg --add-architecture arm64
+          sudo apt-get update -qq
+          sudo apt-get install -y busybox-static:arm64 2>/dev/null || true
+          ARM64_BB=$(find /usr -name "busybox" 2>/dev/null | xargs -I{} sh -c 'file {} | grep -l "aarch64\|ARM aarch64" {}' 2>/dev/null | head -1)
+          if [ -n "$ARM64_BB" ]; then
+            cp "$ARM64_BB" AnyKernel3/tools/busybox
+            echo "Installed ARM64 busybox from: $ARM64_BB"
+          else
+            echo "WARNING: Could not find ARM64 busybox"
+          fi
           chmod +x AnyKernel3/tools/busybox
-          echo "busybox arch: $(file AnyKernel3/tools/busybox)"
+          file AnyKernel3/tools/busybox
 
           cp ${{ env.OUT_DIR }}/arch/arm64/boot/${{ env.KERNEL_IMAGE }} AnyKernel3/
 
