@@ -1,4 +1,4 @@
-  name: Build Nothing 3a Pro Kernel (KernelSU-Next + SuSFS)
+name: Build Nothing 3a Pro Kernel (KernelSU-Next + SuSFS)
 
 on:
   workflow_dispatch:
