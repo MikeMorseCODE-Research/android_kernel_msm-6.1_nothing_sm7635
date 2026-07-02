@@ -1,4 +1,4 @@
-name: Build Nothing 3a Pro Kernel (Wild KSU + SuSFS)
+name: Build Nothing 3a Pro Kernel (KernelSU-Next + SuSFS)
 
 on:
   workflow_dispatch:
@@ -6,9 +6,9 @@ on:
       kernel_version:
         description: 'Kernel version suffix (e.g. 6.1.175)'
         required: false
-        default: '6.1.134'
+        default: '6.1.173'
       ksu_branch:
-        description: 'Wild_KSU branch/tag to use'
+        description: 'KernelSU-Next branch/tag to use'
         required: false
         default: 'dev'
       susfs_enabled:
@@ -41,8 +41,8 @@ env:
   CLANG_VERSION: r547379
   CLANG_URL: https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r547379.tar.gz
 
-  # Wild KSU
-  WILDKSU_REPO: WildKernels/Wild_KSU
+  # KernelSU-Next
+  KSUNEXT_REPO: rifsxd/KernelSU-Next
 
   # SuSFS
   SUSFS_REPO: simonpunk/susfs4ksu
@@ -63,6 +63,8 @@ jobs:
   build:
     name: Build Kernel - Nothing 3a Pro (SM7635)
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       # ── 1. Checkout kernel source ──────────────────────────────────────────
@@ -91,7 +93,7 @@ jobs:
               | head -1 | cut -f1
           }
 
-          KSU_SHA=$(resolve "${{ env.WILDKSU_REPO }}" "${{ github.event.inputs.ksu_branch }}")
+          KSU_SHA=$(resolve "${{ env.KSUNEXT_REPO }}" "${{ github.event.inputs.ksu_branch }}")
           SUSFS_SHA=""
           for branch in ${{ env.SUSFS_BRANCH }} kernel-6.1 gki-android14-6.1 main; do
             SUSFS_SHA=$(resolve_gl "${{ env.SUSFS_REPO }}" "$branch")
@@ -105,10 +107,10 @@ jobs:
           echo "wkp=${WKP_SHA}"     >> $GITHUB_OUTPUT
           echo "ak3=${AK3_SHA}"     >> $GITHUB_OUTPUT
 
-          echo "Wild_KSU  : ${KSU_SHA}"
-          echo "susfs4ksu : ${SUSFS_SHA}"
-          echo "wk_patches: ${WKP_SHA}"
-          echo "AnyKernel3: ${AK3_SHA}"
+          echo "KernelSU-Next: ${KSU_SHA}"
+          echo "susfs4ksu    : ${SUSFS_SHA}"
+          echo "wk_patches   : ${WKP_SHA}"
+          echo "AnyKernel3   : ${AK3_SHA}"
 
       # ── 3. Install host dependencies ───────────────────────────────────────
       - name: Cache apt packages
@@ -171,65 +173,58 @@ jobs:
           ccache --zero-stats
           echo "CCACHE_EXEC=$(which ccache)" >> $GITHUB_ENV
 
-      # ── 6. Apply Wild KSU ─────────────────────────────────────────────────
-      - name: Cache Wild_KSU
-        id: wildksu-cache
+      # ── 6. Apply KernelSU-Next ───────────────────────────────────────────────
+      - name: Cache KernelSU-Next
+        id: ksunext-cache
         uses: actions/cache@v4
         with:
-          path: Wild_KSU
-          key: wildksu-${{ steps.shas.outputs.ksu }}
+          path: KernelSU-Next
+          key: ksunext-${{ steps.shas.outputs.ksu }}
 
-      - name: Clone Wild_KSU
-        if: steps.wildksu-cache.outputs.cache-hit != 'true'
+      - name: Clone KernelSU-Next
+        if: steps.ksunext-cache.outputs.cache-hit != 'true'
         run: |
           git clone \
             -b ${{ github.event.inputs.ksu_branch }} \
-            https://github.com/${{ env.WILDKSU_REPO }} \
-            Wild_KSU
+            https://github.com/${{ env.KSUNEXT_REPO }} \
+            KernelSU-Next
           # Full clone (no --depth=1) so git describe/rev-list resolve real
           # tags and commit counts — Kbuild's version detection needs this,
           # and its own auto-unshallow fallback fails silently (`|| true`).
 
-      - name: Verify Wild_KSU git version resolves
+      - name: Verify KernelSU-Next git version resolves
         run: |
-          cd Wild_KSU
+          cd KernelSU-Next
           echo "HEAD: $(git rev-parse HEAD)"
           echo "rev-list --count: $(git rev-list --count HEAD)"
           echo "describe --tags: $(git describe --tags --abbrev=0 2>&1)"
           if [ -f .git/shallow ]; then
-            echo "::error::Wild_KSU is still a shallow clone — KSU version will be abnormal"
+            echo "::error::KernelSU-Next is still a shallow clone — KSU version will be abnormal"
             exit 1
           fi
 
-      - name: Show Wild_KSU layout
+      - name: Show KernelSU-Next layout
         run: |
-          echo "=== Wild_KSU top-level ==="
-          ls -la Wild_KSU/
+          echo "=== KernelSU-Next top-level ==="
+          ls -la KernelSU-Next/
           echo "=== kernel/ subdir (if present) ==="
-          ls -la Wild_KSU/kernel/ 2>/dev/null || echo "(no kernel/ subdir found)"
+          ls -la KernelSU-Next/kernel/ 2>/dev/null || echo "(no kernel/ subdir found)"
 
-      - name: Integrate Wild KSU into kernel tree
+      - name: Integrate KernelSU-Next into kernel tree
         run: |
-          # Use setup.sh if the repo ships one (most KSU forks do)
-          if [ -f Wild_KSU/kernel/setup.sh ]; then
-            echo "Using Wild_KSU/kernel/setup.sh"
-            bash Wild_KSU/kernel/setup.sh "${{ github.event.inputs.ksu_branch }}"
-          elif [ -f Wild_KSU/setup.sh ]; then
-            echo "Using Wild_KSU/setup.sh"
-            bash Wild_KSU/setup.sh -
+          # KernelSU-Next ships a standard setup.sh (symlink-based, same
+          # pattern as upstream KernelSU) — no manual copy fallback needed,
+          # and unlike Wild_KSU it has no patches/gki/*.patch step: it hooks
+          # the syscall table directly (hook/arm64/syscall_hook.o,
+          # patch_memory.o) rather than patching kernel source files, so
+          # none of Wild_KSU's post-integration source hacks apply here.
+          if [ -f KernelSU-Next/kernel/setup.sh ]; then
+            echo "Using KernelSU-Next/kernel/setup.sh"
+            bash KernelSU-Next/kernel/setup.sh "${{ github.event.inputs.ksu_branch }}"
           else
-            # Manual copy: prefer kernel/ subdir, fall back to repo root
-            if [ -d Wild_KSU/kernel ] && [ -f Wild_KSU/kernel/Makefile ]; then
-              KSU_SRC=Wild_KSU/kernel
-            elif [ -f Wild_KSU/Makefile ]; then
-              KSU_SRC=Wild_KSU
-            else
-              echo "::error::Cannot locate Wild KSU kernel driver — unexpected repo layout:"
-              find Wild_KSU -maxdepth 2 | head -40
-              exit 1
-            fi
-            echo "Copying KSU driver from: $KSU_SRC"
-            cp -r "$KSU_SRC" drivers/kernelsu
+            echo "::error::setup.sh not found — unexpected KernelSU-Next repo layout:"
+            find KernelSU-Next -maxdepth 2 | head -40
+            exit 1
           fi
 
           # Wire into build system (guard against duplicate entries)
@@ -243,99 +238,19 @@ jobs:
           ls -la drivers/kernelsu/
           echo "=== Kbuild (raw) ==="
           cat drivers/kernelsu/Kbuild 2>/dev/null || echo "(no Kbuild)"
-          echo "=== ksu.c includes ==="
-          grep -n "#include" drivers/kernelsu/ksu.c 2>/dev/null | head -50 || echo "(no ksu.c)"
-          echo "=== sucompat.c function signatures ==="
-          grep -n "^static\|^void ksu_\|^int ksu_\|^bool ksu_" drivers/kernelsu/sucompat.c 2>/dev/null | head -40 || echo "(no sucompat.c)"
-          echo "=== ksu_cred occurrences ==="
-          grep -rn "ksu_cred" drivers/kernelsu/ 2>/dev/null | head -20 || echo "(none)"
-          echo "=== disable_seccomp occurrences ==="
-          grep -rn "disable_seccomp" drivers/kernelsu/ 2>/dev/null | head -20 || echo "(none)"
+          echo "=== Kconfig (raw) ==="
+          cat drivers/kernelsu/Kconfig 2>/dev/null || echo "(no Kconfig)"
 
-          # ── Fix: remove duplicate #include "hook/lsm_hook.c" ───────────
-          if [ -f drivers/kernelsu/ksu.c ]; then
-            awk '/^#include "hook\/lsm_hook\.c"$/{if(seen){print "// duplicate lsm_hook.c include removed"; next}; seen=1} 1' \
-              drivers/kernelsu/ksu.c > /tmp/ksu_c_fixed.c \
-              && mv /tmp/ksu_c_fixed.c drivers/kernelsu/ksu.c \
-              && echo "Processed ksu.c for duplicate lsm_hook.c include" \
-              || echo "awk processing failed — leaving ksu.c unchanged"
-          else
-            echo "ksu.c not found — skipping duplicate include fix"
+          # ── Sanity check: KSU depends on CONFIG_KPROBES ──────────────────
+          # KernelSU-Next's Kconfig requires KPROBES (kprobe-based hooking),
+          # unlike Wild_KSU's CONFIG_KSU_MANUAL_HOOK approach. If the base
+          # defconfig doesn't already enable kprobes, CONFIG_KSU will
+          # silently fail to activate at olddefconfig time later — no
+          # build error, just a kernel with no root. Flag it now so it's
+          # visible in this step's log rather than discovered at flash time.
+          if grep -q "^depends on KPROBES" drivers/kernelsu/Kconfig 2>/dev/null; then
+            echo "NOTE: CONFIG_KSU depends on CONFIG_KPROBES — verifying base defconfig enables it later in Configure kernel step."
           fi
-
-          # ── Fix: sucompat compilation — neither double-compiled nor absent
-          KBUILD_SUCOMPAT=$(grep -c "sucompat\.o" drivers/kernelsu/Kbuild 2>/dev/null || echo 0)
-          KSU_C_INCLUDES=$(grep -c '#include "sucompat\.c"' drivers/kernelsu/ksu.c 2>/dev/null || echo 0)
-          echo "Kbuild has sucompat.o: $KBUILD_SUCOMPAT | ksu.c includes sucompat.c: $KSU_C_INCLUDES"
-          if [ "$KBUILD_SUCOMPAT" -gt 0 ] && [ "$KSU_C_INCLUDES" -gt 0 ]; then
-            echo "Double-compilation: removing sucompat.o from Kbuild (ksu.c already #includes it)"
-            sed -i '/sucompat\.o/d' drivers/kernelsu/Kbuild
-          fi
-          # setuid_hook.c doesn't exist in Wild KSU dev — remove from Kbuild
-          sed -i '/setuid_hook\.o/d' drivers/kernelsu/Kbuild 2>/dev/null || true
-
-          # ── Fix: strip static from sucompat hook functions ─────────────
-          # ksu_handle_stat, ksu_handle_faccessat, ksu_handle_execveat_sucompat
-          # are all still undefined — previous regex didn't match the actual
-          # attribute pattern. Use a simpler approach: any line that (a) contains
-          # one of the target function names AND (b) starts with 'static' has the
-          # leading 'static ' removed, regardless of attributes in between.
-          if [ -f drivers/kernelsu/sucompat.c ]; then
-            python3 -c "f='drivers/kernelsu/sucompat.c'; targets=['ksu_handle_stat','ksu_handle_faccessat','ksu_handle_execveat_sucompat','ksu_handle_execve_sucompat']; lines=open(f).readlines(); out=[l.replace('static ','',1) if any(t in l for t in targets) and l.lstrip().startswith('static') else l for l in lines]; open(f,'w').writelines(out); print('static stripped from {} lines in sucompat.c'.format(sum(1 for a,b in zip(lines,out) if a!=b)))"
-          fi
-
-          # ── Fix: disable_seccomp stub ───────────────────────────────────
-          # hook/lsm_hook.c:54,61 calls disable_seccomp() inside ksu_task_fix_setuid
-          # (lsm_hook.c is #included into ksu.c). setuid_hook.c which defines it
-          # doesn't exist in Wild KSU dev branch. Add empty stub before the include.
-          if grep -q 'disable_seccomp' drivers/kernelsu/hook/lsm_hook.c 2>/dev/null; then
-            sed -i 's|#include "hook/lsm_hook.c"|static void disable_seccomp(void) {}\n#include "hook/lsm_hook.c"|' \
-              drivers/kernelsu/ksu.c \
-              && echo "Added disable_seccomp stub before hook/lsm_hook.c include" \
-              || echo "Could not patch ksu.c for disable_seccomp stub"
-          fi
-
-          # ── Fix: ksu_cred + weak stubs for sucompat hook functions ────────
-          # sucompat.c lines 111/120/146 have non-static definitions — Python
-          # correctly reported 'no match'. The real problem: the #include
-          # "sucompat.c" at ksu.c:43 is likely inside a #ifdef guard (e.g.
-          # CONFIG_KSU_SUCOMPAT) that isn't set in our .config, so the functions
-          # never get compiled. Fix with __weak stubs: linker uses the strong
-          # sucompat.c definition when available, falls back to stub otherwise.
-          if ! grep -rqE "^const struct cred \*ksu_cred|^struct cred \*ksu_cred" drivers/kernelsu/ 2>/dev/null; then
-            echo "ksu_cred not defined anywhere — adding compat stubs file"
-          fi
-          printf '%s\n' \
-            '#include <linux/types.h>' \
-            '#include <linux/cred.h>' \
-            '#include <linux/fs.h>' \
-            '' \
-            'const struct cred *ksu_cred;' \
-            '' \
-            '/* Weak stubs: used only when sucompat.c is compiled out (ifdef guard).*/' \
-            '/* If sucompat.c IS compiled, the linker prefers those strong defs.  */' \
-            '__weak int ksu_handle_faccessat(int *dfd, const char __user **f, int *mode, int *fl) { return 0; }' \
-            '__weak int ksu_handle_stat(int *dfd, const char __user **f, int *fl) { return 0; }' \
-            '__weak int ksu_handle_execveat_sucompat(int *fd, struct filename **fp, void *argv, void *envp, int *fl) { return 0; }' \
-            > drivers/kernelsu/ksu_compat_stubs.c
-          grep -qF 'ksu_compat_stubs.o' drivers/kernelsu/Kbuild \
-            || echo 'obj-y += ksu_compat_stubs.o' >> drivers/kernelsu/Kbuild
-          echo "Written ksu_compat_stubs.c with ksu_cred + weak sucompat stubs"
-
-          # ── Apply Wild KSU's own GKI hook patches ──────────────────────
-          echo "=== Available GKI patches ==="
-          ls Wild_KSU/kernel/patches/gki/*.patch 2>/dev/null || echo "(no GKI patches found at that path)"
-          for patch in Wild_KSU/kernel/patches/gki/*.patch; do
-            [ -f "$patch" ] && git apply --ignore-whitespace "$patch" \
-              && echo "Applied Wild KSU GKI patch: $(basename $patch)" \
-              || echo "Skipped Wild KSU GKI patch: $(basename $patch)"
-          done
-
-          # ── Post-patch diagnostic ───────────────────────────────────────
-          echo "=== Kbuild after modifications ==="
-          cat drivers/kernelsu/Kbuild 2>/dev/null
-          echo "=== ksu_cred referenced in fs/ (from GKI patches) ==="
-          grep -rn "ksu_cred" fs/ 2>/dev/null | head -10 || echo "(none)"
 
       # ── 7. Apply SuSFS patches ────────────────────────────────────────────
       - name: Cache susfs4ksu
@@ -395,16 +310,19 @@ jobs:
           git apply --ignore-whitespace wk_patches/bbr/bbrv3-android14-6.1.patch \
             && echo "Applied BBRv3 (6.1)" || echo "BBRv3 did not apply cleanly — skipped"
 
-          # NOTE: wk_patches/wild/hooks/ is NOT applied — those patches reference
-          # ksu_vfs_read_hook/ksu_input_hook/ksu_handle_execve_ksud which don't
-          # exist in Wild KSU dev branch. Wild KSU's own GKI patches (applied in
-          # step 6) are used instead.
+          # NOTE: wk_patches/wild/hooks/ is NOT applied — those patches target
+          # Wild_KSU's specific hook function names (ksu_vfs_read_hook etc.)
+          # which don't exist in KernelSU-Next. KSU-Next hooks the syscall
+          # table directly and needs no external hook patches at all.
 
           # GKI ABI bypass
           git apply --ignore-whitespace wk_patches/wild/bypass_patches/abi_bypass_gki.patch \
             && echo "Applied GKI ABI bypass" || echo "GKI ABI bypass skipped"
 
-          # SuSFS fix patches (applied on top of the SuSFS integration from step 7)
+          # SuSFS fix patches — these were written against Wild_KSU's SuSFS
+          # integration specifically. They may not apply cleanly on top of
+          # KernelSU-Next + SuSFS; each is already best-effort (non-fatal on
+          # failure), so leaving this loop in place is safe either way.
           if [ "${{ github.event.inputs.susfs_enabled }}" = "true" ]; then
             for patch in wk_patches/ksu/susfs_fix_patches/v2.0.0/*.patch; do
               [ -f "$patch" ] && git apply "$patch" \
@@ -437,12 +355,26 @@ jobs:
             ${{ env.DEFCONFIG }}
 
           # Enable KSU
+          # NOTE: KernelSU-Next's CONFIG_KSU depends on CONFIG_KPROBES
+          # (kprobe-based hooking) — it has no CONFIG_KSU_MANUAL_HOOK
+          # equivalent (that's a Wild_KSU-only flag, dropped here).
+          #
+          # CRITICAL: do NOT disable CONFIG_TRIM_UNUSED_KSYMS or
+          # CONFIG_DEBUG_INFO_BTF. Both affect the kernel's exported-symbol
+          # ABI (module_layout CRC / KMI), and this device boots prebuilt
+          # vendor .ko modules from vendor_boot that we never rebuild.
+          # Disabling either breaks that ABI match — confirmed via boot
+          # panic: every vendor module (incl. phy-qcom-ufs, the UFS/storage
+          # driver) failed to insmod with "disagrees about version of
+          # symbol module_layout" / Exec format error, block devices for
+          # boot_b/vbmeta_b/etc. never appeared in /sys, and init panicked
+          # ("Attempted to kill init!") after failing to mount required
+          # partitions. KernelSU-Next's kprobe-based hooking doesn't need
+          # either of these disabled (that requirement was Wild_KSU-only).
           scripts/config --file ${{ env.OUT_DIR }}/.config \
+            -e CONFIG_KPROBES \
             -e CONFIG_KSU \
-            -e CONFIG_KSU_MANUAL_HOOK \
-            -d CONFIG_TRIM_UNUSED_KSYMS \
-            -e CONFIG_SECTION_MISMATCH_WARN_ONLY \
-            -d CONFIG_DEBUG_INFO_BTF
+            -e CONFIG_SECTION_MISMATCH_WARN_ONLY
 
           # Enable SuSFS if requested
           if [ "${{ github.event.inputs.susfs_enabled }}" = "true" ]; then
@@ -471,19 +403,28 @@ jobs:
             LLVM_IAS=1 \
             olddefconfig
 
+          # ── Verify KSU actually stuck (dependency-driven silent disable) ──
+          # olddefconfig can silently drop CONFIG_KSU back to 'not set' if
+          # CONFIG_KPROBES didn't resolve — no build error, just a kernel
+          # with no root. Fail loudly here instead of discovering it at
+          # flash/boot time.
+          if ! grep -q '^CONFIG_KSU=y' ${{ env.OUT_DIR }}/.config; then
+            echo "::error::CONFIG_KSU did not stick after olddefconfig — check CONFIG_KPROBES/CONFIG_EXT4_FS in the base defconfig"
+            grep -E "^CONFIG_KSU|^CONFIG_KPROBES|^CONFIG_EXT4_FS" ${{ env.OUT_DIR }}/.config || echo "(none of these found in final .config)"
+            exit 1
+          fi
+          echo "Confirmed: $(grep '^CONFIG_KSU=' ${{ env.OUT_DIR }}/.config), $(grep '^CONFIG_KPROBES=' ${{ env.OUT_DIR }}/.config)"
+
       # ── 11. Build kernel ──────────────────────────────────────────────────
       - name: Build kernel
         run: |
           # Inject KSU source diagnostics at top of build.log so they appear
           # in the uploaded artifact — helps debug symbol visibility issues.
           {
-            echo "=== sucompat.c function definitions (post-patch) ==="
-            grep -n "ksu_handle_stat\|ksu_handle_faccessat\|ksu_handle_execveat_sucompat\|ksu_handle_execve_sucompat\|^static\|^void\|^int\|^bool\|^long" \
-              drivers/kernelsu/sucompat.c 2>/dev/null | head -60 || echo "(sucompat.c not found)"
-            echo "=== ksu.c context around sucompat include (lines 38-52) ==="
-            sed -n '38,52p' drivers/kernelsu/ksu.c 2>/dev/null || grep -n "sucompat" drivers/kernelsu/ksu.c 2>/dev/null || echo "(no match)"
-            echo "=== Kbuild (final) ==="
+            echo "=== KernelSU-Next Kbuild (final) ==="
             cat drivers/kernelsu/Kbuild 2>/dev/null || echo "(no Kbuild)"
+            echo "=== KSU / KPROBES config state ==="
+            grep -E "^CONFIG_KSU|^CONFIG_KPROBES|^CONFIG_EXT4_FS" ${{ env.OUT_DIR }}/.config 2>/dev/null || echo "(none found)"
             echo "=== BUILD START ==="
           } > build.log
 
@@ -532,7 +473,7 @@ jobs:
           cat > AnyKernel3/anykernel.sh << 'EOF'
           # AnyKernel3 config for Nothing 3a Pro (asteroids / SM7635)
           properties() { '
-          kernel.string=Wild KSU + SuSFS Kernel for Nothing 3a Pro
+          kernel.string=KernelSU-Next + SuSFS Kernel for Nothing 3a Pro
           do.devicecheck=1
           do.modules=0
           do.systemless=1
@@ -553,30 +494,34 @@ jobs:
           patch_vbmeta_flag=0;
           EOF
 
-          # Get ARM64 busybox (Nothing OS has no 32-bit compat)
-            sudo dpkg --add-architecture arm64
-            # arm64 packages don't exist on security.ubuntu.com/archive.ubuntu.com
-            # (amd64/i386 only) — they live on ports.ubuntu.com. Without this,
-            # apt-get update 404s on every arm64 index and, under bash -e, kills
-            # this whole step before it ever reaches the busybox install line.
-          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble main universe" \
-          | sudo tee /etc/apt/sources.list.d/arm64-ports.list
-          sudo apt-get update -qq || true
-          sudo apt-get install -y busybox-static:arm64 2>/dev/null || true
-          ARM64_BB=$(find /usr -name "busybox" 2>/dev/null | xargs -I{} sh -c 'file {} | grep -l "aarch64\|ARM aarch64" {}' 2>/dev/null | head -1)
-          if [ -n "$ARM64_BB" ]; then
-            cp "$ARM64_BB" AnyKernel3/tools/busybox
-            echo "Installed ARM64 busybox from: $ARM64_BB"
-          else
-              echo "WARNING: Could not find ARM64 busybox"
-          fi
+          # Get ARM64 busybox (Nothing OS has no 32-bit compat).
+          # NOTE: both previous sources are dead/wrong —
+          #   Zackptg5/Cross-Compiled-Binaries-Android/aarch64/busybox-ndk -> 404
+          #   osm0sis/AnyKernel3/tools/busybox -> exists but is 32-bit ARM
+          # `-f`/`--fail` is required: without it, curl treats an HTTP 404
+          # as success and happily writes the error page to the output file,
+          # so the `||` fallback never triggers.
+          curl -fLo AnyKernel3/tools/busybox \
+            https://raw.githubusercontent.com/xerta555/Busybox-Binaries/master/busybox-arm64 \
+            || curl -fLo AnyKernel3/tools/busybox \
+            https://raw.githubusercontent.com/EXALAB/Busybox-static/master/busybox_arm64
           chmod +x AnyKernel3/tools/busybox
-          file AnyKernel3/tools/busybox
+          echo "busybox arch: $(file AnyKernel3/tools/busybox)"
+
+          # Hard fail if what we got isn't actually an aarch64 ELF — don't
+          # let a broken busybox silently ride along into the packaged zip
+          # like it did before (it showed up as flash-time "line 1: 404::
+          # not found" instead of failing here where it's actually useful).
+          if ! file AnyKernel3/tools/busybox | grep -q "ARM aarch64"; then
+            echo "::error::busybox is not a valid aarch64 ELF binary — packaging would produce a broken zip"
+            file AnyKernel3/tools/busybox
+            exit 1
+          fi
 
           cp ${{ env.OUT_DIR }}/arch/arm64/boot/${{ env.KERNEL_IMAGE }} AnyKernel3/
 
           # Build the zip
-          ZIPNAME="WildKSU-SuSFS-asteroids-${{ github.event.inputs.kernel_version }}-$(date +%Y%m%d-%H%M).zip"
+          ZIPNAME="KSUNext-SuSFS-asteroids-${{ github.event.inputs.kernel_version }}-$(date +%Y%m%d-%H%M).zip"
           cd AnyKernel3
           zip -r9 "../${ZIPNAME}" . -x .git\* -x README.md
           cd ..
@@ -608,23 +553,23 @@ jobs:
         uses: ncipollo/release-action@v1
         with:
           tag: asteroids-${{ github.event.inputs.kernel_version }}-r${{ github.run_number }}
-          name: "Wild KSU + SuSFS | Nothing 3a Pro | ${{ github.event.inputs.kernel_version }}"
+          name: "KernelSU-Next + SuSFS | Nothing 3a Pro | ${{ github.event.inputs.kernel_version }}"
           body: |
-            ## Nothing Phone (3a) Pro — Wild KSU Kernel
+            ## Nothing Phone (3a) Pro — KernelSU-Next Kernel
             **Device:** Nothing 3a Pro (asteroids / SM7635)
             **Kernel:** ${{ github.event.inputs.kernel_version }}
-            **Root:** Wild KSU (`${{ github.event.inputs.ksu_branch }}`)
+            **Root:** KernelSU-Next (`${{ github.event.inputs.ksu_branch }}`)
             **SuSFS:** ${{ github.event.inputs.susfs_enabled }}
             **Build:** #${{ github.run_number }} — ${{ github.sha }}
 
             ### Flash Instructions
             1. Have Magisk/KSU/APatch installed for recovery access
             2. Flash the AnyKernel3 ZIP via your recovery or KernelFlasher
-            3. Install the Wild KSU Manager APK from [WildKernels/Wild_KSU](https://github.com/WildKernels/Wild_KSU/releases)
+            3. Install the KernelSU-Next Manager APK from [rifsxd/KernelSU-Next](https://github.com/rifsxd/KernelSU-Next/releases)
             4. Reboot
 
             ### Features
-            - Wild KSU root
+            - KernelSU-Next root (kprobe-based hooking)
             - SuSFS root hiding
             - BBRv3 congestion control (if patch applied cleanly)
 
