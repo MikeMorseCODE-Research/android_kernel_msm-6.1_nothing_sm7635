@@ -1,4 +1,4 @@
-name: Build Nothing 3a Pro Kernel (KernelSU-Next + SuSFS)
+  name: Build Nothing 3a Pro Kernel (KernelSU-Next + SuSFS)
 
 on:
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
       kernel_version:
         description: 'Kernel version suffix (e.g. 6.1.175)'
         required: false
-        default: '6.1.134'
+        default: '6.1.173'
       ksu_branch:
         description: 'KernelSU-Next branch/tag to use'
         required: false
@@ -358,12 +358,23 @@ jobs:
           # NOTE: KernelSU-Next's CONFIG_KSU depends on CONFIG_KPROBES
           # (kprobe-based hooking) — it has no CONFIG_KSU_MANUAL_HOOK
           # equivalent (that's a Wild_KSU-only flag, dropped here).
+          #
+          # CRITICAL: do NOT disable CONFIG_TRIM_UNUSED_KSYMS or
+          # CONFIG_DEBUG_INFO_BTF. Both affect the kernel's exported-symbol
+          # ABI (module_layout CRC / KMI), and this device boots prebuilt
+          # vendor .ko modules from vendor_boot that we never rebuild.
+          # Disabling either breaks that ABI match — confirmed via boot
+          # panic: every vendor module (incl. phy-qcom-ufs, the UFS/storage
+          # driver) failed to insmod with "disagrees about version of
+          # symbol module_layout" / Exec format error, block devices for
+          # boot_b/vbmeta_b/etc. never appeared in /sys, and init panicked
+          # ("Attempted to kill init!") after failing to mount required
+          # partitions. KernelSU-Next's kprobe-based hooking doesn't need
+          # either of these disabled (that requirement was Wild_KSU-only).
           scripts/config --file ${{ env.OUT_DIR }}/.config \
             -e CONFIG_KPROBES \
             -e CONFIG_KSU \
-            -d CONFIG_TRIM_UNUSED_KSYMS \
-            -e CONFIG_SECTION_MISMATCH_WARN_ONLY \
-            -d CONFIG_DEBUG_INFO_BTF
+            -e CONFIG_SECTION_MISMATCH_WARN_ONLY
 
           # Enable SuSFS if requested
           if [ "${{ github.event.inputs.susfs_enabled }}" = "true" ]; then
